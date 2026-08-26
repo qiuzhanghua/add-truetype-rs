@@ -1,0 +1,152 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # 1. 构建作业：只负责编译并上传工作流附件（artifacts）
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---- Windows ----
+          # AMD64: 原生 MSVC 编译，零配置
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            arch: amd64
+            os_label: windows
+            ext: .exe
+          # ARM64: 需要 llvm-tools (提供 lld-link) + cargo-xwin (提供 ARM64 CRT/SDK)
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+            os_label: windows
+            ext: .exe
+          # ---- macOS ----
+          # macos-latest 同时原生支持 amd64 / arm64 两个 target，无需额外工具
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            arch: amd64
+            os_label: macos
+            ext: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            arch: arm64
+            os_label: macos
+            ext: ""
+          # ---- Linux ----
+          # AMD64: 原生编译
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            arch: amd64
+            os_label: linux
+            ext: ""
+          # ARM64: 需要 aarch64 GCC 交叉工具链（zstd-sys 等 C 依赖的编译与链接）
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            arch: arm64
+            os_label: linux
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # ARM64 Windows: 需要 llvm-tools (提供 lld-link) + cargo-xwin (提供 ARM64 CRT/SDK)
+      - name: Install ARM64 Windows cross-compile tools
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-xwin
+
+      - name: Add llvm-tools for ARM64 Windows linker
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        run: rustup component add llvm-tools
+
+      - name: Add rust-lld to PATH (ARM64 Windows only)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: bash
+        run: |
+          SYSROOT="$(rustc --print sysroot)"
+          HOST="$(rustc -vV | grep host | cut -d' ' -f2)"
+          echo "${SYSROOT}/lib/rustlib/${HOST}/bin" >> "$GITHUB_PATH"
+
+      # ARM64 Linux: 安装 aarch64 GCC 交叉工具链
+      - name: Install ARM64 Linux cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      # AMD64 / macOS / Linux x86_64: 直接 cargo build；
+      # Windows ARM64: 用 cargo xwin build
+      - name: Build
+        shell: bash
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: |
+          if [ "${{ matrix.target }}" = "aarch64-pc-windows-msvc" ]; then
+            cargo xwin build --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Extract version
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Rename binary
+        id: rename
+        shell: bash
+        run: |
+          VER="${{ steps.version.outputs.version }}"
+          BIN="add-truetype-${VER}-${{ matrix.os_label }}-${{ matrix.arch }}${{ matrix.ext }}"
+          mv "target/${{ matrix.target }}/release/add-truetype${{ matrix.ext }}" "${BIN}"
+          echo "asset_name=${BIN}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: add-truetype-${{ steps.version.outputs.version }}-${{ matrix.os_label }}-${{ matrix.arch }}
+          path: ${{ steps.rename.outputs.asset_name }}
+
+      # 验证产物存在
+      - name: Verify binary
+        shell: bash
+        run: |
+          file "${{ steps.rename.outputs.asset_name }}" || true
+          ls -lh "${{ steps.rename.outputs.asset_name }}"
+
+  # 2. 发布作业：等待所有构建完成，下载附件并统一发布
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -lh artifacts/
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/add-truetype-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
