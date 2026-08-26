@@ -1,0 +1,24 @@
+[package]
+name = "add-truetype"
+version = "0.1.0"
+edition = "2021"
+description = "把 .ttf/.otf 字体安装到当前用户的命令行工具（macOS / Linux / Windows）"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }  # 命令行解析（--help/--version/-- 等）
+flate2 = "1"   # .tar.gz
+tar = "0.4"    # tar 容器（.tar / .tar.gz / .tar.zst）
+# 只启用纯 Rust 的 deflate 特性（最常见的 zip 压缩方式）：
+# 避免 lzma/bzip2 等 C 依赖，保证各平台（含交叉编译检查）都能编译。
+zip = { version = "2", default-features = false, features = ["deflate", "time"] }
+zstd = "0.13"  # .tar.zst
+
+# 字体内部名称（family name）解析与注册表写入仅在 Windows 需要：
+# macOS/Linux 安装字体不需要读取字体名称。
+[target.'cfg(target_os = "windows")'.dependencies]
+ttf-parser = "0.24"
+winreg = "0.55"
+
+[profile.release]
+strip = true
