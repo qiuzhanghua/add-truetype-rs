@@ -422,17 +422,32 @@ fn register_on_windows(src: &Path, dest: &Path, dry_run: bool, verbose: bool) ->
 
 /// 复制字体到目标目录；Windows 下额外注册到 HKCU。
 /// `total` 为本次安装涉及的字体总数（散装 + 压缩包内），仅用于汇总显示。
+struct InstallResult {
+    installed: usize,
+    overwritten: usize,
+    failed: Vec<(PathBuf, String)>,
+}
+
+impl InstallResult {
+    fn new() -> Self {
+        Self {
+            installed: 0,
+            overwritten: 0,
+            failed: Vec::new(),
+        }
+    }
+}
+
 fn install(
     fonts: &[PathBuf],
     dest: &Path,
     dry_run: bool,
     verbose: bool,
     total: usize,
-) -> std::io::Result<()> {
-    fs::create_dir_all(dest)?;
+) -> InstallResult {
+    let _ = fs::create_dir_all(dest);
 
-    let mut installed = 0;
-    let mut overwritten = 0;
+    let mut result = InstallResult::new();
 
     for src in fonts {
         let file_name = src
@@ -448,15 +463,21 @@ fn install(
             } else {
                 println!("[dry-run] 安装: {}", dest_path.display());
             }
+            continue;
+        }
+
+        if let Err(e) = fs::copy(src, &dest_path) {
+            eprintln!("错误: 无法复制 '{}': {}", file_name, e);
+            result.failed.push((src.clone(), e.to_string()));
+            continue;
+        }
+
+        if exists {
+            result.overwritten += 1;
+            println!("覆盖: {}", file_name);
         } else {
-            fs::copy(src, &dest_path)?;
-            if exists {
-                overwritten += 1;
-                println!("覆盖: {}", file_name);
-            } else {
-                installed += 1;
-                println!("安装: {}", file_name);
-            }
+            result.installed += 1;
+            println!("安装: {}", file_name);
         }
 
         if verbose {
@@ -464,14 +485,17 @@ fn install(
         }
 
         #[cfg(target_os = "windows")]
-        register_on_windows(src, &dest_path, dry_run, verbose)?;
+        if let Err(e) = register_on_windows(src, &dest_path, dry_run, verbose) {
+            eprintln!("错误: 无法注册 '{}': {}", file_name, e);
+            result.failed.push((src.clone(), e.to_string()));
+        }
     }
 
     println!(
         "完成: 新增 {} 个，覆盖 {} 个，共 {} 个。",
-        installed, overwritten, total
+        result.installed, result.overwritten, total
     );
-    Ok(())
+    result
 }
 
 #[cfg(target_os = "linux")]
@@ -658,9 +682,15 @@ fn main() {
         }
     }
 
-    if let Err(e) = install(&fonts, &dest, dry_run, verbose, total) {
-        eprintln!("错误: {}", e);
-        std::process::exit(1);
+    let result = install(&fonts, &dest, dry_run, verbose, total);
+    if !result.failed.is_empty() {
+        eprintln!("\n以下字体安装失败（可能被其他程序占用）：");
+        for (path, err) in &result.failed {
+            let name = path.file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            eprintln!("  - {}: {}", name, err);
+        }
     }
 
     #[cfg(target_os = "linux")]
