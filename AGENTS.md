@@ -32,10 +32,12 @@ cargo test               # 运行单元测试
 2. **路径模式**（显式传入路径）：按类型处理——`.ttf/.otf/.ttc` 直接收集，压缩包解压后收集，目录则按自动扫描规则处理
 
 ### 压缩包支持
-- 支持格式：`.zip` / `.tar.gz` / `.tgz` / `.tar.zst` / `.tar`
+- 支持格式：`.zip` / `.7z` / `.tar.gz` / `.tgz` / `.tar.zst` / `.tar`
 - 解压到系统临时目录（`add-truetype-<pid>-<nanos>`），安装结束后自动清理（即使出错也会 Drop 清理）
 - `tar` 系使用 `flate2::GzDecoder`（tar.gz/tgz）或 `zstd` 解压
 - `zip` 使用 `zip::ZipArchive`
+- `.7z` 使用 `sevenz-rust`（纯 Rust LZMA 解码，无 C 依赖）：`extract_7z()` 解压、
+  列表分支直接从 `SevenZReader.archive().files` 读条目名（dry-run 不解压数据）
 - 路径穿越防护：`sanitize_join` 拒绝 `..`、绝对路径、Prefix（Windows 盘符）等
 
 ### Windows 注册
@@ -60,9 +62,11 @@ cargo test               # 运行单元测试
 
 ### 添加新压缩包格式
 1. 在 `archive_kind()` 添加扩展名判断
-2. 在 `open_archive_reader()` 添加对应读取器
-3. 在 `extract_archive()` 的 match 中添加解压分支
+2. 在 `open_archive_reader()` 添加对应读取器（仅流式格式如 tar 系需要）
+3. 在 `extract_archive()` 的 match 中添加解压分支（非流式格式如 7z 用独立的 `extract_7z()` 等函数）
 4. 在 `list_archive_fonts()` 添加列表读取分支
+5. 添加测试：能用写入器现场生成的格式（zip/tar 系）程序化构造；只读格式（如 7z，
+   `sevenz-rust` 无写入能力）在 `tests/data/` 放内置样例，用 `include_bytes!` 读取
 
 ### 添加新平台
 1. 在 `Platform` 枚举添加变体

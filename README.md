@@ -7,7 +7,7 @@
 
 - **自动模式**（不带路径参数，缺省为当前目录 `.`）：扫描当前目录（仅顶层）与
   `ttf/`、`otf/` 子目录（递归，目录名大小写不敏感）中的 `.ttf` / `.otf` / `.ttc` 字体文件；
-  同时识别当前目录顶层的压缩包（`.zip` / `.tar.gz` / `.tgz` / `.tar.zst` / `.tar`），
+  同时识别当前目录顶层的压缩包（`.zip` / `.7z` / `.tar.gz` / `.tgz` / `.tar.zst` / `.tar`），
   自动解压到临时目录、递归安装其中的字体，安装后清理临时目录。
 - **路径模式**：命令后直接给出路径（文件或目录，如 `add-truetype file.otf
   file.ttf file.tar.gz somedir`），只处理给出的路径——文件按类型直接处理，
@@ -62,7 +62,7 @@ add-truetype -- --dash-name.ttf   # 文件名以 - 开头时，用 -- 分隔
 
 ## 压缩包支持
 
-当前目录顶层的 `.zip`、`.tar.gz`、`.tgz`、`.tar.zst`、`.tar` 会被自动识别，
+当前目录顶层的 `.zip`、`.7z`、`.tar.gz`、`.tgz`、`.tar.zst`、`.tar` 会被自动识别，
 也可以在命令后显式指定压缩包文件（`add-truetype pack.zip`）。
 
 - 解压到系统临时目录（`/tmp/add-truetype-*`），递归找出其中的 `.ttf/.otf/.ttc` 安装，
@@ -75,7 +75,8 @@ add-truetype -- --dash-name.ttf   # 文件名以 - 开头时，用 -- 分隔
   临时目录之外。
 - 注意：只处理当前目录**顶层**的压缩包，不递归解压"压缩包里的压缩包"；
   zip 内条目若使用 bzip2/xz/lzma/zstd 等非常见压缩方式会提示无法解压
-  （常见 zip 均为 deflate/存储压缩，不受影响）。
+  （常见 zip 均为 deflate/存储压缩，不受影响）；`.7z` 支持常见的 LZMA/LZMA2
+  压缩（默认方式），若使用 bzip2/deflate/zstd 等其他 7z 编码方式会提示无法解压。
 
 ## Windows 说明
 

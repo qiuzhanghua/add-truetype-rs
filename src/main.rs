@@ -7,8 +7,8 @@
 //!             HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts
 //!
 //! 字体来源：
-//! - 当前目录（仅顶层）与 ttf/ otf/ 子目录（递归）中的 .ttf/.otf 文件；
-//! - 当前目录顶层的压缩包：.zip / .tar.gz / .tgz / .tar.zst / .tar，
+//! - 当前目录（仅顶层）与 ttf/ otf/ 子目录（递归）中的 .ttf/.otf/.ttc 文件；
+//! - 当前目录顶层的压缩包：.zip / .7z / .tar.gz / .tgz / .tar.zst / .tar，
 //!   会自动解压到临时目录、递归安装其中的字体，完成后清理临时目录。
 
 // 字体内部名称解析仅 Windows 注册时需要（macOS/Linux 不编译该模块）
@@ -32,6 +32,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // 命令行接口由 clap 提供：--help/-h、--version/-V、-- 分隔符等均为原生行为。
 use clap::Parser;
 
+// .7z 解压（sevenz-rust 为纯 Rust 实现，无 C 依赖，保证各平台可交叉编译）。
+use sevenz_rust::{Password, SevenZReader};
+
 #[derive(Parser, Debug)]
 #[command(
     name = "add-truetype",
@@ -41,7 +44,7 @@ use clap::Parser;
 
 不带文件参数时（自动模式）：
   扫描当前目录（仅顶层）与 ttf/、otf/ 子目录（递归）中的 .ttf/.otf 字体，
-  以及当前目录顶层的压缩包（.zip / .tar.gz / .tgz / .tar.zst / .tar），
+  以及当前目录顶层的压缩包（.zip / .7z / .tar.gz / .tgz / .tar.zst / .tar），
   自动解压到临时目录、递归安装其中的字体，安装后清理临时目录。
 
 直接指定路径时（如: add-truetype file.otf file.ttf file.tar.gz 或 add-truetype somedir）：
@@ -202,14 +205,16 @@ fn collect_fonts(cwd: &Path) -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// 压缩包支持：.zip / .tar.gz / .tgz / .tar.zst / .tar
+// 压缩包支持：.zip / .7z / .tar.gz / .tgz / .tar.zst / .tar
 // ---------------------------------------------------------------------------
 
-/// 返回压缩包类型（"zip" / "tar.gz" / "tar.zst" / "tar"），不是压缩包则返回 None。
+/// 返回压缩包类型（"zip" / "7z" / "tar.gz" / "tar.zst" / "tar"），不是压缩包则返回 None。
 fn archive_kind(p: &Path) -> Option<&'static str> {
     let name = p.file_name()?.to_str()?.to_ascii_lowercase();
     if name.ends_with(".zip") {
         Some("zip")
+    } else if name.ends_with(".7z") {
+        Some("7z")
     } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
         Some("tar.gz")
     } else if name.ends_with(".tar.zst") {
@@ -319,6 +324,36 @@ fn extract_tar<R: Read>(reader: R, dest: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// 7z 条目名可能使用反斜杠（Windows 打包），统一转成 / 再当路径处理。
+fn sevenz_rel_path(name: &str) -> PathBuf {
+    PathBuf::from(name.replace('\\', "/"))
+}
+
+/// 解压 .7z 到目标目录（sevenz-rust 纯 Rust 解码，保持各平台可交叉编译）。
+fn extract_7z(archive: &Path, dest: &Path) -> io::Result<()> {
+    let mut reader = SevenZReader::open(archive, Password::empty())
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("7z: {e}")))?;
+    reader
+        .for_each_entries(|entry, stream| {
+            // 跳过目录与空文件，只解压普通文件
+            if entry.is_directory || !entry.has_stream {
+                return Ok(true);
+            }
+            let Some(out) = sanitize_join(dest, &sevenz_rel_path(&entry.name)) else {
+                eprintln!("警告: 跳过解压目标之外的路径: {}", entry.name);
+                return Ok(true);
+            };
+            if let Some(parent) = out.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let mut writer = File::create(&out)?;
+            io::copy(stream, &mut writer)?;
+            Ok(true)
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("7z: {e}")))?;
+    Ok(())
+}
+
 /// 解压压缩包到临时目录并找出其中的字体；
 /// 临时目录随返回值保存，由 Drop 在作用域结束时自动清理。
 struct Extracted {
@@ -342,6 +377,7 @@ fn extract_archive(archive: &Path) -> io::Result<Extracted> {
 
     match archive_kind(archive) {
         Some("zip") => extract_zip(archive, &temp_dir)?,
+        Some("7z") => extract_7z(archive, &temp_dir)?,
         Some("tar.gz") | Some("tar.zst") | Some("tar") => {
             extract_tar(open_archive_reader(archive)?, &temp_dir)?
         }
@@ -377,6 +413,21 @@ fn list_archive_fonts(archive: &Path) -> io::Result<Vec<String>> {
                     && is_font_file(Path::new(entry.name()))
                 {
                     names.push(entry.name().to_string());
+                }
+            }
+        }
+        Some("7z") => {
+            // 条目名从 7z 头部读取，dry-run 无需解压数据
+            let reader = SevenZReader::open(archive, Password::empty())
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("7z: {e}")))?;
+            for entry in &reader.archive().files {
+                if entry.is_directory {
+                    continue;
+                }
+                let p = sevenz_rel_path(&entry.name);
+                // 与解压逻辑一致：跳过不安全路径（如 ../ 穿越）
+                if is_font_file(&p) && sanitize_join(Path::new("."), &p).is_some() {
+                    names.push(entry.name.clone());
                 }
             }
         }
@@ -880,8 +931,10 @@ mod tests {
         assert!(is_archive_file(Path::new("b.tgz")));
         assert!(is_archive_file(Path::new("c.tar.zst")));
         assert!(is_archive_file(Path::new("d.tar")));
-        assert!(!is_archive_file(Path::new("e.ttf")));
-        assert!(!is_archive_file(Path::new("f.zip.bak")));
+        assert!(is_archive_file(Path::new("e.7z")));
+        assert!(is_archive_file(Path::new("E.7Z")));
+        assert!(!is_archive_file(Path::new("f.ttf")));
+        assert!(!is_archive_file(Path::new("g.zip.bak")));
         assert!(!is_archive_file(Path::new("note.txt")));
     }
 
@@ -1035,6 +1088,38 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["FontE.ttf"]);
 
+        let temp = extracted.temp_dir.clone();
+        drop(extracted);
+        assert!(!temp.exists());
+
+        fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn sevenz_archive_extraction_finds_fonts() {
+        // sevenz-rust 只读不解压写入，因此用仓库内置的 .7z 样例（tests/data/sample.7z）
+        let base = test_base("sevenz");
+        let sevenz_path = base.join("fonts.7z");
+        fs::write(&sevenz_path, include_bytes!("../tests/data/sample.7z")).unwrap();
+
+        let extracted = extract_archive(&sevenz_path).unwrap();
+        let mut names: Vec<String> = extracted
+            .fonts
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        // 顶层 + 嵌套目录中的字体都被找到（含 .ttc），非字体文件被忽略
+        assert_eq!(names, vec!["FontA.ttf", "FontB.otf", "FontC.ttc"]);
+
+        // dry-run 列表同样只报告合法字体条目（含嵌套路径）
+        let listed = list_archive_fonts(&sevenz_path).unwrap();
+        assert!(listed.contains(&"FontA.ttf".to_string()));
+        assert!(listed.contains(&"nested/FontB.otf".to_string()));
+        assert!(listed.contains(&"nested/deeper/FontC.ttc".to_string()));
+        assert!(!listed.iter().any(|n| n.contains("readme")));
+
+        // 解压后的临时目录被自动清理
         let temp = extracted.temp_dir.clone();
         drop(extracted);
         assert!(!temp.exists());

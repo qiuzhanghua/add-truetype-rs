@@ -8,6 +8,7 @@ license = "MIT"
 [dependencies]
 clap = { version = "4", features = ["derive"] }  # 命令行解析（--help/--version/-- 等）
 flate2 = "1"   # .tar.gz
+sevenz-rust = "0.6.1"  # .7z（纯 Rust LZMA 解码，保持各平台可交叉编译）
 tar = "0.4"    # tar 容器（.tar / .tar.gz / .tar.zst）
 # 只启用纯 Rust 的 deflate 特性（最常见的 zip 压缩方式）：
 # 避免 lzma/bzip2 等 C 依赖，保证各平台（含交叉编译检查）都能编译。
