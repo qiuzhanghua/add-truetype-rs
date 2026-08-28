@@ -1,8 +1,8 @@
 [package]
 name = "add-truetype"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
-description = "把 .ttf/.otf 字体安装到当前用户的命令行工具（macOS / Linux / Windows）"
+description = "把 .ttf/.otf/.ttc 字体安装到当前用户的命令行工具"
 license = "MIT"
 
 [dependencies]

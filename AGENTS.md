@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-`add-truetype` 是一个纯命令行工具，将 `.ttf` / `.otf` 字体安装到当前用户目录（无需管理员权限），支持 macOS / Linux / Windows。
+`add-truetype` 是一个纯命令行工具，将 `.ttf` / `.otf` / `.ttc` 字体安装到当前用户目录（无需管理员权限），支持 macOS / Linux / Windows。
 
 ## 源码结构
 
@@ -29,7 +29,7 @@ cargo test               # 运行单元测试
 
 ### 字体收集流程
 1. **自动模式**（路径为空或为 `.`）：扫描当前目录顶层 + `ttf/`/`otf/` 子目录（递归，目录名大小写不敏感）+ 顶层压缩包
-2. **路径模式**（显式传入路径）：按类型处理——`.ttf/.otf` 直接收集，压缩包解压后收集，目录则按自动扫描规则处理
+2. **路径模式**（显式传入路径）：按类型处理——`.ttf/.otf/.ttc` 直接收集，压缩包解压后收集，目录则按自动扫描规则处理
 
 ### 压缩包支持
 - 支持格式：`.zip` / `.tar.gz` / `.tgz` / `.tar.zst` / `.tar`
@@ -42,6 +42,7 @@ cargo test               # 运行单元测试
 - 字体复制到 `%LOCALAPPDATA%\Microsoft\Windows\Fonts`
 - 注册表写入 `HKCU\Software\Microsoft\Windows NT\CurrentVersion\Fonts`
 - 注册表值名通过 `ttf-parser` 解析字体内部 family 名称，失败则退回文件名
+- `.ttc` 文件中每个 face 独立注册，同名 face 自动加序号后缀区分
 
 ### 安装错误处理
 - 复制失败（如字体被其他程序占用）打印错误并**继续**安装其余字体

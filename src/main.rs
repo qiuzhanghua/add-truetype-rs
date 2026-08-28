@@ -142,7 +142,11 @@ fn user_font_dir() -> Option<PathBuf> {
 
 fn is_font_file(p: &Path) -> bool {
     match p.extension().and_then(|e| e.to_str()) {
-        Some(e) => e.eq_ignore_ascii_case("ttf") || e.eq_ignore_ascii_case("otf"),
+        Some(e) => {
+            e.eq_ignore_ascii_case("ttf")
+                || e.eq_ignore_ascii_case("otf")
+                || e.eq_ignore_ascii_case("ttc")
+        }
         None => false,
     }
 }
@@ -409,15 +413,40 @@ fn register_on_windows(src: &Path, dest: &Path, dry_run: bool, verbose: bool) ->
         .extension()
         .map(|e| e.eq_ignore_ascii_case("otf"))
         .unwrap_or(false);
-    let family = fontname::family_name(src).unwrap_or_else(|| {
-        let stem = src
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        eprintln!("警告: 无法读取 '{}' 的字体名称（可能不是有效字体文件），改用文件名 '{}' 注册。", file_name, stem);
-        stem
-    });
-    registry::register_font(dest, &family, is_otf, dry_run, verbose)
+    let is_ttc = src
+        .extension()
+        .map(|e| e.eq_ignore_ascii_case("ttc"))
+        .unwrap_or(false);
+
+    let all_families = fontname::all_family_names(src);
+
+    if is_ttc && all_families.len() > 1 {
+        let mut name_counts: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+        for (face_index, family) in all_families {
+            let count = name_counts.entry(family.clone()).or_insert(0);
+            *count += 1;
+            let unique_name = if *count > 1 {
+                format!("{} {}", family, *count)
+            } else {
+                family
+            };
+
+            if let Err(e) = registry::register_font(dest, &unique_name, is_otf, dry_run, verbose) {
+                eprintln!("错误: 无法注册 '{}' (face {}): {}", unique_name, face_index, e);
+            }
+        }
+        Ok(())
+    } else {
+        let family = fontname::family_name(src).unwrap_or_else(|| {
+            let stem = src
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            eprintln!("警告: 无法读取 '{}' 的字体名称（可能不是有效字体文件），改用文件名 '{}' 注册。", file_name, stem);
+            stem
+        });
+        registry::register_font(dest, &family, is_otf, dry_run, verbose)
+    }
 }
 
 /// 复制字体到目标目录；Windows 下额外注册到 HKCU。
@@ -801,6 +830,7 @@ mod tests {
                     .unwrap()
                     .to_string_lossy()
                     .into_owned()
+                    .replace('\\', "/")
             })
             .collect();
         got.sort();
@@ -824,6 +854,8 @@ mod tests {
         assert!(is_font_file(Path::new("a.ttf")));
         assert!(is_font_file(Path::new("B.Otf")));
         assert!(is_font_file(Path::new("b.otf")));
+        assert!(is_font_file(Path::new("C.TTC")));
+        assert!(is_font_file(Path::new("c.ttc")));
         assert!(!is_font_file(Path::new("note.txt")));
         assert!(!is_font_file(Path::new("noext")));
     }
